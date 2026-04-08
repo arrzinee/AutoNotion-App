@@ -1,0 +1,26 @@
+{
+  "name": "autonotion-app",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && cross-env NODE_ENV=development electron .\"",
+    "build": "vite build && electron-builder"
+  },
+  "dependencies": {
+    "electron-store": "^11.0.2",
+    "node-fetch": "^3.3.2"
+  },
+  "devDependencies": {
+    "electron": "^41.2.0",
+    "electron-builder": "^26.8.1",
+    "concurrently": "^9.2.1",
+    "wait-on": "^9.0.4",
+    "cross-env": "^10.1.0",
+    "@tailwindcss/vite": "^4.2.2",
+    "tailwindcss": "^4.2.2",
+    "@vitejs/plugin-react": "^6.0.1",
+    "vite": "^8.0.4"
+  }
+}
