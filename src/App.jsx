@@ -1,54 +1,156 @@
 import { useEffect, useState } from 'react'
-import SettingsPanel from './components/SettingsPanel.jsx'
-import StatusPill from './components/StatusPill.jsx'
-import {
-  defaultSettings,
-  getAppInfo,
-  getSettings,
-  runHealthCheck,
-  saveSettings,
-} from './lib/desktop.js'
+import Chat from './components/Chat.jsx'
+import { CheckIcon, NotionIcon, RefreshIcon } from './components/Icons.jsx'
+import Settings from './components/Settings.jsx'
+import Sidebar from './components/Sidebar.jsx'
 
-const initialStatus = {
-  notion: { ok: false, service: 'notion', message: 'Not tested yet.' },
-  gemini: { ok: false, service: 'gemini', message: 'Not tested yet.' },
-  checkedAt: null,
+function getElectronAPI() {
+  return window.electronAPI
+}
+
+function getFallbackStore() {
+  return {
+    async get(key, fallback = '') {
+      return window.localStorage.getItem(key) || fallback
+    },
+    async set(key, value) {
+      window.localStorage.setItem(key, value)
+      return true
+    },
+    async delete(key) {
+      window.localStorage.removeItem(key)
+      return true
+    },
+  }
+}
+
+function SetupScreen({
+  apiKey,
+  onApiKeyChange,
+  onSave,
+  loadingPages,
+  pageError,
+}) {
+  const [showKey, setShowKey] = useState(false)
+
+  async function openIntegrations(event) {
+    event.preventDefault()
+
+    if (getElectronAPI()?.shell?.openExternal) {
+      await getElectronAPI().shell.openExternal('https://www.notion.so/my-integrations')
+      return
+    }
+
+    window.open('https://www.notion.so/my-integrations', '_blank', 'noopener,noreferrer')
+  }
+
+  return (
+    <section className="relative flex min-h-screen items-center justify-center overflow-hidden px-4 py-8">
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(99,102,241,0.28),transparent_28%),radial-gradient(circle_at_bottom_right,rgba(99,102,241,0.12),transparent_22%)]" />
+
+      <div className="glass glow-accent relative z-10 w-full max-w-lg rounded-[2rem] border border-[var(--border-light)] p-7 shadow-[0_24px_90px_rgba(0,0,0,0.42)] sm:p-9">
+        <div className="mb-8 flex items-center gap-3">
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[rgba(99,102,241,0.14)] text-[var(--accent)]">
+            <NotionIcon size={24} />
+          </div>
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.28em] text-[var(--text-secondary)]">
+              AutoNotion
+            </p>
+            <h1 className="mt-1 text-3xl font-bold tracking-[-0.04em] text-[var(--text-primary)]">
+              Connect your workspace
+            </h1>
+          </div>
+        </div>
+
+        <p className="mb-6 text-sm leading-7 text-[var(--text-secondary)]">
+          Paste your Notion integration key to load pages and let AutoNotion plan
+          changes for your workspace.
+        </p>
+
+        <form
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault()
+            onSave()
+          }}
+        >
+          <label className="grid gap-2">
+            <span className="text-sm font-medium text-[var(--text-secondary)]">
+              Notion API key
+            </span>
+            <div className="relative">
+              <input
+                type={showKey ? 'text' : 'password'}
+                value={apiKey}
+                onChange={(event) => onApiKeyChange(event.target.value)}
+                placeholder="secret_xxxxx"
+                className="input-base pr-24"
+              />
+              <button
+                type="button"
+                onClick={() => setShowKey((value) => !value)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full border border-[var(--border-light)] px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-[var(--text-secondary)] transition hover:border-[var(--accent)] hover:text-[var(--text-primary)]"
+              >
+                {showKey ? 'Hide' : 'Show'}
+              </button>
+            </div>
+          </label>
+
+          {pageError ? (
+            <p className="rounded-2xl border border-[rgba(239,68,68,0.28)] bg-[rgba(239,68,68,0.08)] px-4 py-3 text-sm text-[var(--error)]">
+              {pageError}
+            </p>
+          ) : null}
+
+          <button
+            type="submit"
+            disabled={loadingPages || !apiKey.trim()}
+            className="btn-primary w-full"
+          >
+            {loadingPages ? 'Connecting...' : 'Connect'}
+          </button>
+        </form>
+
+        <div className="mt-6 text-sm text-[var(--text-secondary)]">
+          Need a Notion integration key?{' '}
+          <a
+            href="https://www.notion.so/my-integrations"
+            onClick={openIntegrations}
+            className="font-semibold text-[var(--accent-hover)] underline decoration-[rgba(129,140,248,0.4)] underline-offset-4"
+          >
+            Open notion.so/my-integrations
+          </a>
+        </div>
+      </div>
+    </section>
+  )
 }
 
 function App() {
-  const [appInfo, setAppInfo] = useState({
-    name: 'AutoNotion',
-    mode: 'browser-preview',
-    version: '0.0.0',
-    isElectron: false,
-  })
-  const [settings, setSettings] = useState(defaultSettings)
-  const [status, setStatus] = useState(initialStatus)
-  const [isBooting, setIsBooting] = useState(true)
-  const [isSaving, setIsSaving] = useState(false)
-  const [isChecking, setIsChecking] = useState(false)
+  const [apiKey, setApiKey] = useState('')
+  const [pages, setPages] = useState([])
+  const [selectedPage, setSelectedPage] = useState(null)
+  const [view, setView] = useState('setup')
+  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [loadingPages, setLoadingPages] = useState(false)
+  const [pageError, setPageError] = useState('')
+
+  const store = getElectronAPI()?.store || getFallbackStore()
+  const notion = getElectronAPI()?.notion
 
   useEffect(() => {
     let isMounted = true
 
     async function bootstrap() {
-      try {
-        const [nextAppInfo, savedSettings] = await Promise.all([
-          getAppInfo(),
-          getSettings(),
-        ])
+      const savedKey = await store.get('notionToken', '')
 
-        if (!isMounted) {
-          return
-        }
-
-        setAppInfo(nextAppInfo)
-        setSettings(savedSettings)
-      } finally {
-        if (isMounted) {
-          setIsBooting(false)
-        }
+      if (!isMounted || !savedKey) {
+        return
       }
+
+      setApiKey(savedKey)
+      await loadPages()
     }
 
     bootstrap()
@@ -58,245 +160,198 @@ function App() {
     }
   }, [])
 
-  function updateField(key, value) {
-    setSettings((current) => ({
-      ...current,
-      [key]: value,
-    }))
-  }
+  async function loadPages() {
+    if (!notion?.fetchPages) {
+      setPageError('Electron bridge is not available. Open the desktop app to load pages.')
+      return
+    }
 
-  async function handleSave() {
-    setIsSaving(true)
+    setLoadingPages(true)
+    setPageError('')
 
     try {
-      const nextSettings = await saveSettings(settings)
-      setSettings(nextSettings)
+      const nextPages = await notion.fetchPages()
+
+      setPages(nextPages)
+      setSelectedPage((current) => {
+        if (current) {
+          const matchingPage = nextPages.find((page) => page.id === current.id)
+
+          if (matchingPage) {
+            return matchingPage
+          }
+        }
+
+        return nextPages.find((page) => page.object === 'page') || nextPages[0] || null
+      })
+      setView('chat')
+    } catch (error) {
+      setPageError(error.message || 'Unable to load Notion pages.')
+      setView('setup')
     } finally {
-      setIsSaving(false)
+      setLoadingPages(false)
     }
   }
 
-  async function handleCheck() {
-    setIsChecking(true)
+  async function handleSaveApiKey(nextKey = apiKey) {
+    const trimmedKey = nextKey.trim()
 
-    try {
-      const result = await runHealthCheck(settings)
-      setStatus(result)
-    } finally {
-      setIsChecking(false)
+    if (!trimmedKey) {
+      setPageError('Enter a Notion API key before connecting.')
+      return
     }
+
+    setApiKey(trimmedKey)
+    await store.set('notionToken', trimmedKey)
+    await loadPages()
   }
 
-  const lastCheckedLabel = status.checkedAt
-    ? new Date(status.checkedAt).toLocaleString()
-    : 'No connection test yet'
+  async function handleDisconnect() {
+    await store.delete('notionToken')
+    setApiKey('')
+    setPages([])
+    setSelectedPage(null)
+    setPageError('')
+    setView('setup')
+  }
+
+  function handleSelectPage(page) {
+    setSelectedPage(page)
+    setSidebarOpen(false)
+  }
+
+  function handlePageCreated(newPage) {
+    setPages((current) => {
+      const existing = current.filter((page) => page.id !== newPage.id)
+      return [newPage, ...existing]
+    })
+    setSelectedPage(newPage)
+  }
+
+  if (view === 'setup') {
+    return (
+      <SetupScreen
+        apiKey={apiKey}
+        onApiKeyChange={setApiKey}
+        onSave={handleSaveApiKey}
+        loadingPages={loadingPages}
+        pageError={pageError}
+      />
+    )
+  }
 
   return (
-    <main className="min-h-screen px-4 py-6 text-stone-900 sm:px-6 lg:px-8">
-      <div className="mx-auto flex min-h-[calc(100vh-3rem)] w-full max-w-7xl flex-col gap-6 rounded-[2rem] border border-white/55 bg-[rgba(250,245,236,0.88)] p-5 shadow-[0_30px_120px_rgba(78,58,30,0.18)] backdrop-blur md:p-8">
-        <section className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
-          <div className="space-y-4">
-            <div className="inline-flex items-center gap-2 rounded-full border border-amber-900/10 bg-white/70 px-4 py-2 text-xs font-semibold uppercase tracking-[0.24em] text-amber-950/70">
-              Desktop command center
-            </div>
-            <div className="space-y-4">
-              <p className="max-w-2xl text-sm font-medium uppercase tracking-[0.32em] text-stone-500">
-                Electron + React + Vite baseline
-              </p>
-              <h1 className="max-w-3xl text-4xl font-semibold leading-tight tracking-[-0.04em] text-balance text-stone-950 sm:text-5xl lg:text-6xl">
-                AutoNotion is ready for real app code instead of starter files.
-              </h1>
-              <p className="max-w-2xl text-base leading-7 text-stone-600 sm:text-lg">
-                The renderer now talks to Electron through a preload bridge,
-                settings persist with electron-store, and both Notion and Gemini
-                have dedicated service modules for connection checks.
-              </p>
-            </div>
-          </div>
+    <main className="min-h-screen bg-[var(--bg-primary)] text-[var(--text-primary)]">
+      <div className="flex min-h-screen">
+        <div
+          className={`fixed inset-y-0 left-0 z-30 transition-transform duration-200 lg:static lg:translate-x-0 ${
+            sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+          }`}
+        >
+          <Sidebar
+            pages={pages}
+            selectedPage={selectedPage}
+            onSelectPage={handleSelectPage}
+            onOpenSettings={() => setView('settings')}
+            onRefresh={loadPages}
+            loadingPages={loadingPages}
+          />
+        </div>
 
-          <aside className="grid gap-4 rounded-[1.75rem] border border-stone-950/8 bg-[linear-gradient(180deg,rgba(99,72,42,0.95),rgba(39,28,18,0.98))] p-5 text-stone-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.12)]">
-            <div className="flex items-center justify-between">
-              <p className="text-sm uppercase tracking-[0.28em] text-stone-300">
-                Runtime
-              </p>
-              <StatusPill
-                status={appInfo.isElectron ? 'success' : 'pending'}
-                label={appInfo.isElectron ? 'Electron bridge live' : 'Browser preview'}
-              />
-            </div>
+        {sidebarOpen ? (
+          <button
+            type="button"
+            aria-label="Close sidebar"
+            className="fixed inset-0 z-20 bg-black/50 lg:hidden"
+            onClick={() => setSidebarOpen(false)}
+          />
+        ) : null}
 
-            <div className="grid gap-3 text-sm text-stone-200">
-              <div className="rounded-2xl border border-white/10 bg-white/6 p-4">
-                <p className="text-xs uppercase tracking-[0.24em] text-stone-400">
-                  App
+        <section className="flex min-w-0 flex-1 flex-col">
+          <header className="sticky top-0 z-10 flex items-center justify-between gap-4 border-b border-[var(--border)] bg-[rgba(10,10,15,0.9)] px-4 py-4 backdrop-blur lg:px-6">
+            <div className="flex min-w-0 items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setSidebarOpen((value) => !value)}
+                className="btn-ghost px-3 py-2 lg:hidden"
+              >
+                Menu
+              </button>
+              <div className="min-w-0">
+                <p className="text-xs font-semibold uppercase tracking-[0.26em] text-[var(--text-muted)]">
+                  {view === 'settings' ? 'Settings' : 'Workspace'}
                 </p>
-                <p className="mt-2 text-xl font-semibold text-white">
-                  {appInfo.name}
-                </p>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="rounded-2xl border border-white/10 bg-white/6 p-4">
-                  <p className="text-xs uppercase tracking-[0.24em] text-stone-400">
-                    Mode
-                  </p>
-                  <p className="mt-2 text-lg font-semibold capitalize text-white">
-                    {appInfo.mode}
-                  </p>
-                </div>
-                <div className="rounded-2xl border border-white/10 bg-white/6 p-4">
-                  <p className="text-xs uppercase tracking-[0.24em] text-stone-400">
-                    Version
-                  </p>
-                  <p className="mt-2 text-lg font-semibold text-white">
-                    {appInfo.version}
-                  </p>
+                <div className="mt-1 flex min-w-0 items-center gap-2">
+                  <span className="truncate text-lg font-semibold">
+                    {selectedPage?.title || 'No page selected'}
+                  </span>
+                  {selectedPage ? (
+                    <span className="badge hidden sm:inline-flex">
+                      {selectedPage.object}
+                    </span>
+                  ) : null}
                 </div>
               </div>
             </div>
 
-            <div className="mt-auto flex flex-wrap gap-3">
+            <div className="flex items-center gap-2">
+              {pageError ? (
+                <span className="badge-error hidden sm:inline-flex">{pageError}</span>
+              ) : (
+                <span className="badge-success hidden sm:inline-flex">
+                  <CheckIcon size={14} />
+                  {pages.length} items
+                </span>
+              )}
+
               <button
                 type="button"
-                onClick={handleSave}
-                disabled={isSaving || isBooting}
-                className="inline-flex items-center justify-center rounded-full bg-[#f6d38b] px-5 py-3 text-sm font-semibold text-stone-950 transition hover:bg-[#efc96f] disabled:cursor-not-allowed disabled:opacity-60"
+                onClick={loadPages}
+                disabled={loadingPages}
+                className="btn-ghost px-3 py-2"
               >
-                {isSaving ? 'Saving...' : 'Save Settings'}
+                <RefreshIcon size={16} />
+                <span className="hidden sm:inline">{loadingPages ? 'Loading' : 'Refresh'}</span>
               </button>
-              <button
-                type="button"
-                onClick={handleCheck}
-                disabled={isChecking || isBooting}
-                className="inline-flex items-center justify-center rounded-full border border-white/15 bg-white/8 px-5 py-3 text-sm font-semibold text-white transition hover:bg-white/14 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {isChecking ? 'Checking...' : 'Test Connections'}
-              </button>
-            </div>
-          </aside>
-        </section>
 
-        <section className="grid gap-4 xl:grid-cols-2">
-          <SettingsPanel
-            eyebrow="Notion"
-            title="Workspace connection"
-            description="Save the integration token and the database ID your automations should target."
-            footer={
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-sm text-stone-500">{status.notion.message}</p>
-                <StatusPill
-                  status={status.notion.ok ? 'success' : 'pending'}
-                  label={status.notion.ok ? 'Connected' : 'Needs attention'}
-                />
-              </div>
-            }
-          >
-            <label className="grid gap-2">
-              <span className="text-sm font-medium text-stone-700">
-                Integration token
-              </span>
-              <input
-                type="password"
-                value={settings.notionToken}
-                onChange={(event) => updateField('notionToken', event.target.value)}
-                placeholder="secret_xxxxx"
-                className="field-input"
-              />
-            </label>
-            <label className="grid gap-2">
-              <span className="text-sm font-medium text-stone-700">
-                Database ID
-              </span>
-              <input
-                type="text"
-                value={settings.notionDatabaseId}
-                onChange={(event) =>
-                  updateField('notionDatabaseId', event.target.value)
-                }
-                placeholder="32-character database id"
-                className="field-input"
-              />
-            </label>
-          </SettingsPanel>
+              {view === 'settings' ? (
+                <button
+                  type="button"
+                  onClick={() => setView('chat')}
+                  className="btn-primary px-4 py-2"
+                >
+                  Back to Chat
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setView('settings')}
+                  className="btn-primary px-4 py-2"
+                >
+                  Settings
+                </button>
+              )}
+            </div>
+          </header>
 
-          <SettingsPanel
-            eyebrow="Gemini"
-            title="Model configuration"
-            description="Keep your AI settings separate from the UI so the renderer stays focused on product logic."
-            footer={
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-sm text-stone-500">{status.gemini.message}</p>
-                <StatusPill
-                  status={status.gemini.ok ? 'success' : 'pending'}
-                  label={status.gemini.ok ? 'Connected' : 'Needs attention'}
-                />
-              </div>
-            }
-          >
-            <label className="grid gap-2">
-              <span className="text-sm font-medium text-stone-700">
-                API key
-              </span>
-              <input
-                type="password"
-                value={settings.geminiApiKey}
-                onChange={(event) => updateField('geminiApiKey', event.target.value)}
-                placeholder="AIza..."
-                className="field-input"
+          <div className="flex-1 px-4 py-4 lg:px-6 lg:py-6">
+            {view === 'chat' ? (
+              <Chat
+                apiKey={apiKey}
+                pages={pages}
+                selectedPage={selectedPage}
+                onSelectPage={setSelectedPage}
+                onPageCreated={handlePageCreated}
               />
-            </label>
-            <label className="grid gap-2">
-              <span className="text-sm font-medium text-stone-700">
-                Preferred model
-              </span>
-              <input
-                type="text"
-                value={settings.geminiModel}
-                onChange={(event) => updateField('geminiModel', event.target.value)}
-                placeholder="gemini-1.5-flash"
-                className="field-input"
+            ) : (
+              <Settings
+                apiKey={apiKey}
+                pageCount={pages.length}
+                onSave={handleSaveApiKey}
+                onDisconnect={handleDisconnect}
+                onBack={() => setView('chat')}
               />
-            </label>
-          </SettingsPanel>
-        </section>
-
-        <section className="grid gap-4 rounded-[1.75rem] border border-stone-950/8 bg-white/70 p-5 shadow-[0_18px_60px_rgba(82,59,26,0.08)] md:grid-cols-[0.8fr_1.2fr]">
-          <div className="space-y-3">
-            <p className="text-sm uppercase tracking-[0.28em] text-stone-500">
-              Structure notes
-            </p>
-            <h2 className="text-2xl font-semibold tracking-[-0.03em] text-stone-950">
-              Cleaner boundaries make the next features easier.
-            </h2>
-            <p className="text-sm leading-7 text-stone-600">
-              Use the renderer for interface work, keep secrets and API calls in
-              Electron modules, and let the preload script be the only bridge
-              across that boundary.
-            </p>
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="soft-card">
-              <p className="soft-card-title">Electron</p>
-              <p className="soft-card-copy">
-                Main process, window boot, IPC handlers, persistent settings.
-              </p>
-            </div>
-            <div className="soft-card">
-              <p className="soft-card-title">Preload</p>
-              <p className="soft-card-copy">
-                Safe API surface exposed as <code>window.autonotion</code>.
-              </p>
-            </div>
-            <div className="soft-card">
-              <p className="soft-card-title">Renderer</p>
-              <p className="soft-card-copy">
-                React UI, component composition, local form state.
-              </p>
-            </div>
-            <div className="soft-card">
-              <p className="soft-card-title">Status</p>
-              <p className="soft-card-copy">Last connection test: {lastCheckedLabel}</p>
-            </div>
+            )}
           </div>
         </section>
       </div>
